@@ -1,0 +1,166 @@
+#!/usr/bin/env lua
+io.stdout:setvbuf("line")
+
+local WIDTH = 161
+
+local COLOR1 = 
+{
+    ["D"] = "\027[34m",
+    ["I"] = "\027[34m",
+    ["W"] = "\027[91m",
+    ["E"] = "\027[91m",
+    ["F"] = "\027[91m",
+    ["!"] = "\027[91m",
+}
+
+local COLOR2 = 
+{
+    ["D"] = "\027[35m",
+    ["I"] = "\027[35m",
+    ["W"] = "\027[36m",
+    ["E"] = "\027[36m",
+    ["F"] = "\027[36m",
+    ["!"] = "\027[36m",
+}
+
+local COLOR3 = 
+{
+    ["D"] = "\027[95m",
+    ["I"] = "\027[95m",
+    ["W"] = "\027[33m",
+    ["E"] = "\027[33m",
+    ["F"] = "\027[33m",
+    ["!"] = "\027[33m",
+}
+
+local FOCUSED_CHANNEL = arg[1]
+
+function getColorSet(channel)
+    if channel == "DEVELOP" then
+        return COLOR2
+    end
+
+    if channel ~= (FOCUSED_CHANNEL or channel) then
+        return COLOR3
+    end
+
+    return COLOR1
+end
+
+function readHeader()
+    local l = io.read("*l")
+    if l == nil then
+        os.exit(0)
+    end
+    
+    local level, channel, left
+    
+    --[0069-D-MSG]
+    local p1 = "^%[%d+%-(%a)%-([^%-]-)%]# (.*)$"
+    level, channel, left = string.match(l, p1)
+    if left ~= nil then
+        return level, channel, left
+    end
+    
+    --[D-MSG]
+    local p2 = "^%[(%a)%-([^%-]-)%]# (.*)$"
+    level, channel, left = string.match(l, p2)
+    if left ~= nil then
+        return level, channel, left
+    end
+    
+    --[0345-DEBUG]
+    local p3 = "^%[%d+%-([^%-]-)%]# (.*)$"
+    level, channel, left = nil, string.match(l, p3)
+    if left ~= nil then
+        return level, channel, left
+    end
+    
+    return nil
+end
+
+function readLog()
+    local level, channel, left
+    repeat
+        level, channel, left = readHeader()
+    until left ~= nil
+    
+    local logs, log, hour, min, sec = {}, nil, nil, nil
+    
+    repeat
+        local pattern = "^(.*) %-%- %d+%-%d+%-%d+ (%d+):(%d+):(%d+)$"
+        log, hour, min, sec = string.match(left, pattern)
+        if log == nil then
+            table.insert(logs, left)
+            left = io.read("*l")
+        else
+            table.insert(logs, log)
+        end
+    until log ~= nil
+    
+    local time = string.format("%02d:%02d:%02d", hour, min, sec)
+    return level, channel, logs, time
+end
+
+function printHeader(log, fmt, ...)
+    local h = string.format(fmt, ...)
+    if #h + #log < WIDTH then
+        print(h .. log)
+        return
+    end
+    
+    print(h .. "..." .. string.sub(log, #log - WIDTH + 5 + #h, #log))
+end
+
+function printTail(s)
+    s = "--->" .. s
+    s = string.gsub(s, "\t", "    ")
+    if #s < WIDTH then
+        print(s)
+        return
+    end
+    
+    print(string.sub(s, 1, WIDTH - 4) .. "...")
+end
+
+function printLog(level, channel, logs, time)
+    if channel == "DEBUG" or channel == nil then
+        return
+    end
+    
+    local colorSet = getColorSet(channel)
+    io.stdout:write(colorSet[level or "!"])
+    
+    if level ~= nil then
+        printHeader(logs[1], "%s |%s-%s| ", time, level, channel)
+    else
+        printHeader(logs[1], "%s |%s| ", time, channel)
+    end
+    
+    for i = 2, #logs do
+        printTail(logs[i])
+    end
+    
+    io.stdout:write("\027[0m")
+end
+
+local cutting = true
+
+while true do
+    local level, channel, logs, time = readLog()
+    
+    if logs[1] == "### Startup ###" then
+        assert(level == nil and channel == nil)
+        
+        if cutting then
+            cutting = false
+            print(string.rep("-", WIDTH - 1))
+        end
+        
+        return
+    end
+    
+    cutting = true
+    
+    printLog(level, channel, logs, time)
+end
